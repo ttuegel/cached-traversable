@@ -17,7 +17,11 @@ import System.FilePath ((<.>))
 
 -- | Traverse the given structure, retrieving values from and storing values in
 -- the cache at the given path. Only the element type need be serializable. The
--- struture must be lazy in the values for this to be effective.
+-- struture must be lazy in the values for this to be effective. This does not
+-- work well for large structures because the entire cache is rewritten every
+-- time a new value is computed. Works best when values are small, but expensive
+-- to compute. Atomicity and consistency are weakly guaranteed by writing the
+-- cache to a new file every time, and renaming the file into place.
 cached :: (Binary a, Traversable t) => FilePath -> t a -> IO (t a)
 cached path dat = do
     cacheExists <- doesFileExist path
@@ -33,6 +37,8 @@ cached path dat = do
 
     flushCache = do
         (oldCache, newCache) <- State.get
+        -- When there is data yet to be read in oldCache, the cache is not stale
+        -- so there is no reason to write a new one.
         when (LBS.null oldCache) $ liftIO $ do
             forM_ newCache (BS.appendFile newPath)
             renameFile newPath path
@@ -41,7 +47,6 @@ cached path dat = do
         decoded <- decodeOrFail . fst <$> State.get
         case decoded of
             Left _ -> do
-                State.modify $ first $ const LBS.empty
                 State.modify $ const LBS.empty *** appendEncoded computed
                 seq computed flushCache
                 return computed
